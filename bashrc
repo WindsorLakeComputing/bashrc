@@ -1,3 +1,36 @@
+
+#---------------------------------------------------------------
+# Global bashrc File
+#---------------------------------------------------------------
+
+# Skip this config if we aren't in bash
+[[ -n "${BASH_VERSION}" ]] || return
+
+# Skip this config if has already loaded
+if declare -f __bashrc_reload >/dev/null && [[ ${bashrc_reload_flag:-0} -eq 0 ]]
+then
+  return
+fi
+
+[[ -n "${bashrc_prefix}" ]] && export bashrc_prefix
+
+
+##
+# CLI for the bash profile.
+bashrc() {
+  local command="$1"
+  shift
+
+  case "$command" in
+    check)    __bashrc_check $@;;
+    init)     __bashrc_init $@;;
+    reload)   __bashrc_reload $@;;
+    update)   __bashrc_update $@;;
+    version)  __bashrc_version $@;;
+    *)  printf "usage: bashrc (check|init|reload|update|version)\n" && return 10 ;;
+  esac
+}
+
 #  ---------------------------------------------------------------------------
 #
 #  Description:  This file holds all my BASH configurations and aliases
