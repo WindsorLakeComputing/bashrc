@@ -14,6 +14,334 @@ fi
 
 [[ -n "${bashrc_prefix}" ]] && export bashrc_prefix
 
+#---------------------------------------------------------------
+# Functions
+#---------------------------------------------------------------
+
+##
+# Unsets any outstanding environment variables and unsets itself.
+#
+cleanup() {
+  unset PROMPT_COLOR REMOTE_PROMPT_COLOR _os _id bashrc_reload_flag
+  unset cleanup
+}
+
+##
+# Takes json on stdin and prints the value of a given path on stdout.
+#
+# @param [String] json path in the form of ["one"]["two"]
+json_val() {
+  [[ -z "$1" ]] && printf "Usage: json_val <path>\n" && return 10
+
+  python -c 'import sys; import json; \
+    j = json.loads(sys.stdin.read()); \
+    print j'$1';'
+}
+
+##
+# Checks if there any upstream updates.
+#
+# @param -q  suppress output
+# @return 0 if up to date, 1 if there are updates, and 5 if there are errors
+__bashrc_check() {
+  if [ "$1" == "-q" ] ; then local suppress=1 && shift ; fi
+
+  local prefix="${bashrc_prefix:-/etc/bash}"
+
+  if [ ! -f "${prefix}/tip.date" ] ; then
+    printf ">>> File ${prefix}/tip.date does not exist so cannot check.\n"
+    return 5
+  fi
+
+  local tip_date=$(cat ${prefix}/tip.date)
+  local flavor=${tip_date%% *}
+
+  case "$flavor" in
+    TARBALL)
+      if command -v curl >/dev/null && command -v python >/dev/null ; then
+        local last_commit_date="$(curl -sSL \
+          http://github.com/api/v2/json/commits/show/fnichol/bashrc/HEAD | \
+          json_val '["commit"]["committed_date"]')"
+        if [ "${tip_date#* }" == "$last_commit_date" ] ; then
+          [[ -z "$suppress" ]] && printf -- "-----> bashrc is up to date.\n"
+          return 0
+        else
+          [[ -z "$suppress" ]] && \
+            printf -- "-----> bashrc has updates to download." && \
+            printf " Use 'bashrc update' to get current.\n"
+          return 1
+        fi
+      else
+        [[ -z "$suppress" ]] && \
+          printf ">>>> Can't find curl and/or python commands.\n"
+        return 5
+      fi
+    ;;
+    *)
+      if command -v git >/dev/null ; then
+        (cd $prefix && super_cmd git fetch --quiet 2>&1 >/dev/null)
+        (cd $prefix && super_cmd git --no-pager diff --quiet --exit-code \
+          --no-color master..origin/master >/dev/null)
+        if [[ "$?" -eq 0 ]] ; then
+          [[ -z "$suppress" ]] && printf -- "-----> bashrc is up to date.\n"
+          return 0
+        else
+          [[ -z "$suppress" ]] && \
+            printf -- "-----> bashrc has updates to download." && \
+            printf " Use 'bashrc update' to get current.\n"
+          return 1
+        fi
+      else
+        [[ -z "$suppress" ]] && printf ">>>> Can't find git command.\n"
+        return 5
+      fi
+    ;;
+  esac
+}
+
+##
+# Initializes bashrc profile
+__bashrc_init() {
+  local prefix="${bashrc_prefix:-/etc/bash}"
+
+  local egrep_cmd=
+  case "$(uname -s)" in
+    SunOS)  egrep_cmd=/usr/gnu/bin/egrep  ;;
+    *)      egrep_cmd=egrep               ;;
+  esac
+
+  if [[ -f "${prefix}/bashrc.local" ]] ; then
+    printf "A pre-existing ${prefix}/bashrc.local file was found, using it\n"
+  else
+    printf -- "-----> Creating ${prefix}/bashrc.local ...\n"
+    super_cmd cp "${prefix}/bashrc.local.site" "${prefix}/bashrc.local"
+
+    local color=
+    case "$(uname -s)" in
+      Darwin)   color="green"   ; local remote_color="yellow" ;;
+      Linux)    color="cyan"    ;;
+      OpenBSD)  color="red"     ;;
+      FreeBSD)  color="magenta" ;;
+      CYGWIN*)  color="black"   ;;
+      SunOS)
+        if /usr/sbin/zoneadm list -pi | $egrep_cmd :global: >/dev/null ; then
+          color="magenta" # root zone
+        else
+          color="cyan"    # non-global zone
+        fi
+        ;;
+    esac
+
+    printf "Setting prompt color to be \"$color\" ...\n"
+    super_cmd sed -i"" -e "s|^#\{0,1\}PROMPT_COLOR=.*$|PROMPT_COLOR=$color|g" \
+      "${prefix}/bashrc.local"
+    unset color
+
+    if [[ -n "$remote_color" ]] ; then
+      printf "Setting remote prompt color to be \"$remote_color\" ...\n"
+      super_cmd sed -i"" -e \
+        "s|^#\{0,1\}REMOTE_PROMPT_COLOR=.*$|REMOTE_PROMPT_COLOR=$remote_color|g" \
+        "${prefix}/bashrc.local"
+      unset remote_color
+    fi
+  fi
+
+  if [[ -n "$bashrc_local_install" ]] ; then
+    local p="${HOME}/.bash_profile"
+
+    if [[ -r "$p" ]] && $egrep_cmd -q '${HOME}/.bash/bashrc' $p 2>&1 >/dev/null ; then
+      printf ">> Mention of \${HOME}/.bash/bashrc found in \"$p\"\n"
+      printf ">> You can add the following lines to get sourced:\n"
+      printf ">>   if [[ -s \"\${HOME}/.bash/bashrc\" ]] ; then\n"
+      printf ">>     bashrc_local_install=1\n"
+      printf ">>     bashrc_prefix=\${HOME}/.bash\n"
+      printf ">>     export bashrc_local_install bashrc_prefix\n"
+      printf ">>     source \"\${bashrc_prefix}/bashrc\"\n"
+      printf ">>   fi\n"
+    else
+      printf -- "-----> Adding source hook into \"$p\" ...\n"
+      cat >> $p <<END_OF_PROFILE
+if [[ -s "\${HOME}/.bash/bashrc" ]] ; then
+  bashrc_local_install=1
+  bashrc_prefix="\${HOME}/.bash"
+  export bashrc_local_install bashrc_prefix
+  source "\${bashrc_prefix}/bashrc"
+fi
+END_OF_PROFILE
+    fi
+  else
+    local p=
+    case "$(uname -s)" in
+      Darwin)
+        p="/etc/bashrc"
+        ;;
+      Linux)
+        if [[ -f "/etc/SuSE-release" ]] ; then
+          p="/etc/bash.bashrc.local"
+        else
+          p="/etc/profile"
+        fi
+        ;;
+      SunOS|OpenBSD|CYGWIN*)
+        p="/etc/profile"
+        ;;
+      *)
+        printf ">>>> Don't know how to add source hook in this operating system.\n"
+        return 4
+        ;;
+    esac
+
+    if $egrep_cmd -q '/etc/bash/bashrc' $p 2>&1 >/dev/null ; then
+      printf ">> Mention of /etc/bash/bashrc found in \"$p\"\n"
+      printf ">> You can add the following line to get sourced:\n"
+      printf ">>   [[ -s \"/etc/bash/bashrc\" ]] && . \"/etc/bash/bashrc\""
+    else
+      printf -- "-----> Adding source hook into \"$p\" ...\n"
+      cat <<END_OF_PROFILE | super_cmd tee -a $p >/dev/null
+[[ -s "/etc/bash/bashrc" ]] && . "/etc/bash/bashrc"
+END_OF_PROFILE
+    fi
+  fi
+  unset p
+
+  printf "\n\n"
+  printf "    #---------------------------------------------------------------\n"
+  printf "    # Installation of bashrc complete. To activate either exit\n"
+  printf "    # this shell or type: 'source ${prefix}/bashrc'.\n"
+  printf "    #\n"
+  printf "    # To check for updates to bashrc, run: 'bashrc check'.\n"
+  printf "    #\n"
+  printf "    # To keep bashrc up to date, periodically run: 'bashrc update'.\n"
+  printf "    #---------------------------------------------------------------\n\n"
+}
+
+##
+# Pulls down new changes to the bashrc via git.
+__bashrc_update() {
+  local prefix="${bashrc_prefix:-/etc/bash}"
+  local repo="github.com/fnichol/bashrc.git"
+
+  # clear out old tarball install or legacy hg cruft
+  local stash=
+  if [ ! -d "$prefix/.git" ] ; then
+    # save a copy of bashrc.local
+    if [[ -f "$prefix/bashrc.local" ]] ; then
+      stash="/tmp/bashrc.local.$$"
+      super_cmd cp -p "$prefix/bashrc.local" "$stash"
+    fi
+    super_cmd rm -rf "$prefix"
+  fi
+
+  if [[ -d "$prefix/.git" ]] ; then
+    if command -v git >/dev/null ; then
+      ( builtin cd "$prefix" && super_cmd git pull origin master )
+    else
+      printf "\n>>>> Command 'git' not found on the path, please install a"
+      printf " packge or build git from source and try again.\n\n"
+      return 10
+    fi
+  elif command -v git >/dev/null ; then
+    ( builtin cd "$(dirname $prefix)" && \
+      super_cmd git clone --depth 1 git://$repo $(basename $prefix) || \
+      super_cmd git clone https://$repo $(basename $prefix) )
+  elif command -v curl >/dev/null && command -v python >/dev/null; then
+    local tarball_install=1
+    case "$(uname -s)" in
+      SunOS)  local tar_cmd="$(which gtar)"  ;;
+      *)      local tar_cmd="$(which tar)"   ;;
+    esac
+    [[ -z "$tar_cmd" ]] && \
+      printf ">>>> tar command not found on path, aborting.\n" && return 13
+
+    printf -- "-----> Git not found, so downloading tarball to $prefix ...\n"
+    super_cmd mkdir -p "$prefix"
+    curl -LsSf http://github.com/fnichol/bashrc/tarball/master | \
+      super_cmd ${tar_cmd} xvz -C${prefix} --strip 1
+  else
+    printf "\n>>>> Command 'git', 'curl', or 'python' were not found on the path, please install a packge or build these packages from source and try again.\n\n"
+    return 16
+  fi
+  local result="$?"
+
+  # move bashrc.local back
+  [[ -n "$stash" ]] && super_cmd mv "$stash" "$prefix/bashrc.local"
+
+  if [ "$result" -ne 0 ]; then
+    printf "\n>>>> bashrc could not find an update or has failed.\n\n"
+    return 11
+  fi
+
+  if [[ -n "$tarball_install" ]] ; then
+
+    printf -- "-----> Determining version date from github api ...\n"
+    local tip_date="$(curl -sSL \
+      http://github.com/api/v2/json/commits/show/fnichol/bashrc/HEAD | \
+      python -c 'import sys; import json; j = json.loads(sys.stdin.read()); print j["commit"]["committed_date"];')"
+    if [ "$?" -ne 0 ] ; then tip_date="UNKNOWN" ; fi
+    super_cmd bash -c "(printf \"TARBALL $tip_date\" > \"${prefix}/tip.date\")"
+    __bashrc_reload
+    printf -- "\n\n-----> bashrc was updated and reloaded.\n"
+  else
+
+    local old_file="/tmp/bashrc.date.$$"
+    if [[ -f "$prefix/tip.date" ]] ; then
+      super_cmd mv "$prefix/tip.date" "$old_file"
+    else
+      touch "$old_file"
+    fi
+
+    local git_cmd=$(which git)
+    super_cmd bash -c "( builtin cd $prefix && \
+      $git_cmd log -1 --pretty=\"format:%h %ci\" > $prefix/tip.date)"
+
+    if ! diff -q "$old_file" "$prefix/tip.date" >/dev/null ; then
+      local old_rev=$(awk '{print $1}' $old_file)
+      local new_rev=$(awk '{print $1}' $prefix/tip.date)
+      printf "\n#### Updates ####\n-----------------\n"
+      ( builtin cd $prefix && super_cmd git --no-pager log \
+        --pretty=format:'%C(yellow)%h%Creset - %s %Cgreen(%cr)%Creset' \
+        --abbrev-commit --date=relative $old_rev..$new_rev )
+      printf "\n-----------------\n\n"
+      __bashrc_reload
+      printf -- "\n\n-----> bashrc was updated and reloaded.\n"
+    else
+      printf -- "\n-----> bashrc is already up to date and current.\n"
+    fi
+
+    super_cmd rm -f "$old_file"
+  fi
+
+  if [[ -z "$(cat $prefix/tip.date)" ]] ; then
+    super_cmd rm -f "$prefix/tip.date"
+  fi
+}
+
+##
+# Reloads bashrc profile
+__bashrc_reload() {
+  bashrc_reload_flag=1
+  printf "\n" # give bashrc source line more prominence
+  source "${bashrc_prefix:-/etc/bash}/bashrc"
+  printf -- "-----> bashrc was reload at $(date +%F\ %T\ %z).\n"
+  unset bashrc_reload_flag
+}
+
+##
+# Displays the version of the bashrc profile
+__bashrc_version() {
+  local ver=
+  # Echo the version and date of the profile
+  if [[ -f "${bashrc_prefix:-/etc/bash}/tip.date" ]] ; then
+    ver="$(cat ${bashrc_prefix:-/etc/bash}/tip.date)"
+  elif command -v git >/dev/null ; then
+    ver="$(cd ${bashrc_prefix:-/etc/bash} && \
+      git log -1 --pretty='format:%h %ci')"
+  else
+    ver="UNKNOWN"
+  fi
+  printf "bashrc ($ver)\n\n"
+}
+
 
 ##
 # CLI for the bash profile.
