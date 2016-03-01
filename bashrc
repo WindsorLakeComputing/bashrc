@@ -17,7 +17,7 @@ fi
 #---------------------------------------------------------------
 # Functions
 #---------------------------------------------------------------
-. /opt/rh/python27/enable
+
 ##
 # Unsets any outstanding environment variables and unsets itself.
 #
@@ -203,8 +203,7 @@ END_OF_PROFILE
     fi
   fi
   unset p
-  # permanently enable custom Software Collections
-  . /opt/rh/python27/enable
+  
   printf "\n\n"
   printf "    #---------------------------------------------------------------\n"
   printf "    # Installation of bashrc complete. To activate either exit\n"
@@ -389,7 +388,7 @@ bashrc() {
 #   Set Paths
 #   ------------------------------------------------------------
     export PATH="$PATH:/usr/local/bin/"
-    export PATH="/usr/local/git/bin:/sw/bin/:/usr/local/bin:/usr/local/:/usr/local/sbin:/usr/local/mysql/bin:$PATH"
+    export PATH="/usr/local/git/bin:/sw/bin/:/usr/local/bin:/usr/local/:/usr/local/sbin:/opt/rh/python27/enable:/usr/local/mysql/bin:$PATH"
 
 #   Set Default Editor
 #   ------------------------------------------------------------
