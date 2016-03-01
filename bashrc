@@ -17,7 +17,7 @@ fi
 #---------------------------------------------------------------
 # Functions
 #---------------------------------------------------------------
-
+. /opt/rh/python27/enable
 ##
 # Unsets any outstanding environment variables and unsets itself.
 #
