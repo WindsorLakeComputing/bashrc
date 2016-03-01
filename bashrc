@@ -204,7 +204,7 @@ END_OF_PROFILE
   fi
   unset p
   # permanently enable custom Software Collections
-  super_cmd scl enable python27 bash
+  . /opt/rh/python27/enable
   printf "\n\n"
   printf "    #---------------------------------------------------------------\n"
   printf "    # Installation of bashrc complete. To activate either exit\n"
